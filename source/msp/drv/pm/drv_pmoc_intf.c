@@ -126,6 +126,7 @@ void                mpu_get_temperature(HI_S16 * ps16Temp);
 #ifdef HI_GPIO_LIGHT_SUPPORT
 static GPIO_EXT_FUNC_S *s_pGpioFunc = HI_NULL;
 #define GPIO_LIGHT HI_GPIO_LIGHT_SET
+static HI_VOID SetGpioLightSuspend(HI_BOOL bSuspend);
 #endif
 
 static HI_U32 wdgon = 0x0;
@@ -2726,6 +2727,12 @@ HI_S32 PMOC_DRV_ModInit(HI_VOID)
 
     /* get chip type for the whole pmoc module use */
     HI_DRV_SYS_GetChipVersion(&g_enChipType, &g_enChipID);
+
+#ifdef HI_GPIO_LIGHT_SUPPORT
+    /* GPIO40 is the board red LED and GPIO42 is green.  Put the board in
+     * the booting state as soon as the vendor PM module is initialized. */
+    SetGpioLightSuspend(HI_TRUE);
+#endif
 
     ret = c51_loadCode();
     if (ret)
