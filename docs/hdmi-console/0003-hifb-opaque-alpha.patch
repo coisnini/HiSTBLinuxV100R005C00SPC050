@@ -1,0 +1,23 @@
+diff --git a/source/msp/drv/hifb/src/drv_hifb_osr.c b/source/msp/drv/hifb/src/drv_hifb_osr.c
+index 810907021..175b1b6ef 100644
+--- a/source/msp/drv/hifb/src/drv_hifb_osr.c
++++ b/source/msp/drv/hifb/src/drv_hifb_osr.c
+@@ -4888,7 +4889,8 @@ static HI_S32 DRV_HIFB_SetCmapColor(unsigned regno, unsigned red, unsigned green
+                 ((u32*) (info->pseudo_palette))[regno] =
+                     ((red   & 0xf800) >>  1) |
+                     ((green & 0xf800) >>  6) |
+-                    ((blue  & 0xf800) >> 11);
++                    ((blue  & 0xf800) >> 11) |
++                    0x8000; /* hdmi-console: force opaque alpha bit (bit15) */
+             }
+             else
+             {
+@@ -5173,7 +5175,7 @@ static HI_S32 DRV_HIFB_InitLayerInfo(HI_U32 u32LayerID)
+     par->stRunInfo.u32ParamModifyMask       = 0;
+     par->stExtendInfo.stAlpha.bAlphaEnable  = HI_TRUE;
+     par->stExtendInfo.stAlpha.bAlphaChannel = HI_FALSE;
+-    par->stExtendInfo.stAlpha.u8Alpha0      = HIFB_ALPHA_TRANSPARENT;
++    par->stExtendInfo.stAlpha.u8Alpha0      = HIFB_ALPHA_OPAQUE; /* hdmi-console: was TRANSPARENT (console pixels have A=0) */
+     par->stExtendInfo.stAlpha.u8Alpha1      = HIFB_ALPHA_OPAQUE;
+     par->stExtendInfo.stAlpha.u8GlobalAlpha = HIFB_ALPHA_OPAQUE;
+     g_stDrvAdpCallBackFunction.HIFB_DRV_SetLayerAlpha(par->stBaseInfo.u32LayerID, &par->stExtendInfo.stAlpha);

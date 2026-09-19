@@ -75,7 +75,7 @@ Date                Author                Modification
 
 /***************************** Macro Definition ******************************/
 
-//#define CFG_HIFB_SUPPORT_CONSOLE
+#define CFG_HIFB_SUPPORT_CONSOLE
 //#define CFG_HIFB_PROC_DEBUG
 
 /**
@@ -687,6 +687,7 @@ extern struct dma_buf *hifb_memblock_export(phys_addr_t base, size_t size, int f
 static HI_S32 DRV_HIFB_ParseInsmodParameter(HI_VOID);
 static inline unsigned long DRV_HIFB_GetVramSize(HI_CHAR* pstr);
 static inline HI_S32  DRV_HIFB_RegisterFrameBuffer   (HI_U32 u32LayerId);
+static inline HI_S32  DRV_HIFB_DoRegisterFrameBuffer (HI_U32 u32LayerId);
 static inline HI_VOID DRV_HIFB_UnRegisterFrameBuffer (HI_U32 u32LayerId);
 static inline HI_S32 DRV_HIFB_ReAllocLayerBuffer     (HI_U32 u32LayerId, HI_U32 BufSize);
 static inline HI_S32 DRV_HIFB_AllocLayerBuffer       (HI_U32 u32LayerId, HI_U32 BufSize);
@@ -4888,7 +4889,8 @@ static HI_S32 DRV_HIFB_SetCmapColor(unsigned regno, unsigned red, unsigned green
                 ((u32*) (info->pseudo_palette))[regno] =
                     ((red   & 0xf800) >>  1) |
                     ((green & 0xf800) >>  6) |
-                    ((blue  & 0xf800) >> 11);
+                    ((blue  & 0xf800) >> 11) |
+                    0x8000; /* hdmi-console: force opaque alpha bit (bit15) */
             }
             else
             {
@@ -5173,7 +5175,7 @@ static HI_S32 DRV_HIFB_InitLayerInfo(HI_U32 u32LayerID)
     par->stRunInfo.u32ParamModifyMask       = 0;
     par->stExtendInfo.stAlpha.bAlphaEnable  = HI_TRUE;
     par->stExtendInfo.stAlpha.bAlphaChannel = HI_FALSE;
-    par->stExtendInfo.stAlpha.u8Alpha0      = HIFB_ALPHA_TRANSPARENT;
+    par->stExtendInfo.stAlpha.u8Alpha0      = HIFB_ALPHA_OPAQUE; /* hdmi-console: was TRANSPARENT (console pixels have A=0) */
     par->stExtendInfo.stAlpha.u8Alpha1      = HIFB_ALPHA_OPAQUE;
     par->stExtendInfo.stAlpha.u8GlobalAlpha = HIFB_ALPHA_OPAQUE;
     g_stDrvAdpCallBackFunction.HIFB_DRV_SetLayerAlpha(par->stBaseInfo.u32LayerID, &par->stExtendInfo.stAlpha);
@@ -5462,6 +5464,12 @@ HI_S32 HIFB_DRV_ModInit(HI_VOID)
             continue;
         }
 
+        s32Ret = DRV_HIFB_DoRegisterFrameBuffer(u32LayerId);
+        if (HI_SUCCESS != s32Ret)
+        {
+            goto ERR_EXIT;
+        }
+
         #ifdef CFG_HIFB_SCROLLTEXT_SUPPORT
             HI_GFX_Memset(&s_stTextLayer[u32LayerId], 0, sizeof(HIFB_SCROLLTEXT_INFO_S));
         #endif
@@ -5627,9 +5635,44 @@ static inline unsigned long DRV_HIFB_GetVramSize(HI_CHAR* pstr)
 }
 
 
-static inline HI_S32 DRV_HIFB_RegisterFrameBuffer(HI_U32 u32LayerId)
+/* CNcomment: delayed fb register so that modelist/var are valid */
+static inline HI_S32 DRV_HIFB_DoRegisterFrameBuffer(HI_U32 u32LayerId)
 {
     HI_S32 s32Ret = 0;
+    HIFB_PAR_S *pstPar = NULL;
+    struct fb_info *FbInfo = NULL;
+
+    FbInfo = s_stLayer[u32LayerId].pstInfo;
+    if (NULL == FbInfo)
+    {
+        return HI_FAILURE;
+    }
+
+    pstPar = (HIFB_PAR_S *)FbInfo->par;
+    if (NULL == pstPar)
+    {
+        return HI_FAILURE;
+    }
+
+    s32Ret = register_framebuffer(FbInfo);
+    if (s32Ret < 0)
+    {
+        HIFB_ERROR("failed to register_framebuffer!\n");
+        return HI_FAILURE;
+    }
+
+    pstPar->bFrameBufferRegister = HI_TRUE;
+
+#ifdef CFG_HIFB_FENCE_SUPPORT
+    init_waitqueue_head(&pstPar->WaiteEndFenceRefresh);
+#endif
+
+    return HI_SUCCESS;
+}
+
+
+static inline HI_S32 DRV_HIFB_RegisterFrameBuffer(HI_U32 u32LayerId)
+{
     HIFB_PAR_S *pstPar = NULL;
     struct fb_info *FbInfo = NULL;
 
@@ -5649,18 +5692,26 @@ static inline HI_S32 DRV_HIFB_RegisterFrameBuffer(HI_U32 u32LayerId)
     FbInfo->pseudo_palette = (HI_U8*)(FbInfo->par) + sizeof(HIFB_PAR_S);
     FbInfo->fix.smem_len   = s_stLayer[u32LayerId].u32LayerSize;
 
-    s32Ret = register_framebuffer(FbInfo);
-    if (s32Ret < 0)
+    pstPar->stBaseInfo.u32LayerID = u32LayerId;
+
+    /* HIFB_LAYER_TYPE_HD/SD/AD */
+    if (IS_HD_LAYER(u32LayerId))
     {
-        HIFB_ERROR("failed to register_framebuffer!\n");
+        FbInfo->var = s_stDefVar[HIFB_LAYER_TYPE_HD];
+    }
+    else if (IS_SD_LAYER(u32LayerId))
+    {
+        FbInfo->var = s_stDefVar[HIFB_LAYER_TYPE_SD];
+    }
+    else if (IS_AD_LAYER(u32LayerId) || IS_MINOR_HD_LAYER(u32LayerId) || IS_MINOR_SD_LAYER(u32LayerId))
+    {
+        FbInfo->var = s_stDefVar[HIFB_LAYER_TYPE_AD];
+    }
+    else
+    {
+        HIFB_ERROR("unsupported layer %d!\n", u32LayerId);
         return HI_FAILURE;
     }
-
-    pstPar->bFrameBufferRegister = HI_TRUE;
-
-#ifdef CFG_HIFB_FENCE_SUPPORT
-    init_waitqueue_head(&pstPar->WaiteEndFenceRefresh);
-#endif
 
     return HI_SUCCESS;
 }
